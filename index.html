@@ -1,34 +1,306 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Run Python on File Upload</title>
-  <!-- Load PyScript -->
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>EEIO (Ghosh) — PyScript Example</title>
+
+  <!-- PyScript (loads Pyodide + runtime) -->
   <link rel="stylesheet" href="https://pyscript.net/latest/pyscript.css" />
   <script defer src="https://pyscript.net/latest/pyscript.js"></script>
+
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, Arial; max-width:900px; margin:28px auto; padding:12px; }
+    .card{ border-radius:12px; box-shadow:0 6px 18px rgba(20,20,30,0.06); padding:16px; margin-bottom:16px }
+    label{ display:block; margin:8px 0 4px }
+    button{ padding:8px 12px; border-radius:8px; border:0; cursor:pointer }
+    pre{ background:#0f1724; color:#e6edf3; padding:12px; border-radius:8px; overflow:auto }
+  </style>
 </head>
 <body>
-  <h1>Upload a file and process with Python</h1>
+  <h1>Environmentally-Extended IO — Ghosh model (one region, 130 sectors)</h1>
 
-  <!-- File input -->
-  <input type="file" id="fileInput" />
+  <div class="card">
+    <p>This page runs a **Ghosh (supply-driven)** EEIO calculation in the browser using <strong>PyScript</strong>. You can upload your own matrices or use the built-in example dataset (130 sectors, artificially generated for demo).</p>
 
-  <!-- Python code -->
+    <strong>Files you can upload (CSV):</strong>
+    <ul>
+      <li><code>Z.csv</code> — transactions matrix (130 x 130). Rows = supplying sectors i, Columns = purchasing sectors j; element z_ij is flow from i → j.</li>
+      <li><code>x.csv</code> — gross output vector (length 130). One column CSV or single-row CSV accepted.</li>
+      <li><code>e.csv</code> — environmental extension vector (length 130). e_i is environment extension per unit output of sector i (e.g., emissions per output). If you supply total extensions rather than intensities, set the checkbox below.</li>
+      <li>Alternatively upload a single ZIP containing these files named exactly <code>Z.csv</code>, <code>x.csv</code>, <code>e.csv</code> (zip handling supported).</li>
+    </ul>
+
+    <label>Upload files (or leave empty to use demo data):</label>
+    <input id="fileInput" type="file" multiple />
+
+    <div style="margin-top:10px">
+      <label><input id="ext-is-total" type="checkbox" /> The uploaded <strong>e.csv</strong> contains <em>total</em> extensions (not per-unit). If checked, code will convert to per-unit by dividing by x.</label>
+    </div>
+
+    <div style="margin-top:12px">
+      <button id="runBtn">Run Ghosh EEIO</button>
+      <button id="exampleBtn">Load Example (130 sectors)</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Results</h3>
+    <div id="status">No run yet.</div>
+    <h4>Top 10 sectors by final footprint (example ranking)</h4>
+    <pre id="results">(results will appear here)</pre>
+  </div>
+
   <py-script>
-import io
-from pyodide.ffi import to_js
-
-def handle_file(event):
-    file = event.target.files[0]
-    text = await file.text()
-    # Example: count words
-    word_count = len(text.split())
-    pyscript.write("output", f"File '{file.name}' has {word_count} words.")
-
-# Attach to file input
 from js import document
-document.getElementById("fileInput").addEventListener("change", handle_file)
+import asyncio
+import io
+
+# We'll try to import pandas and numpy; Pyodide usually provides numpy, pandas is available in recent builds.
+try:
+    import numpy as np
+    import pandas as pd
+except Exception as e:
+    # attempt to load pandas via micropip
+    from pyodide.http import pyfetch
+    import micropip
+    await micropip.install('pandas')
+    import numpy as np
+    import pandas as pd
+
+# Utility: parse CSV text into numpy array or vector
+
+def csv_to_matrix(text):
+    s = io.StringIO(text)
+    df = pd.read_csv(s, header=None)
+    return df.values.astype(float)
+
+
+def csv_to_vector(text):
+    arr = csv_to_matrix(text)
+    # Accept column or row vectors
+    if arr.shape[0] == 1:
+        return arr.flatten()
+    if arr.shape[1] == 1:
+        return arr.flatten()
+    # if a single-row headerless csv but square, allow length-n by taking first column
+    if arr.ndim == 2 and min(arr.shape) == 1:
+        return arr.flatten()
+    # fallback: if it's square and user supplied as CSV, but they meant a diagonal vector: error
+    return arr.flatten()
+
+
+async def read_uploaded_files(js_files):
+    # returns dict name->text
+    files = {}
+    for f in js_files:
+        name = f.name
+        # if zip, try to read inner files
+        if name.lower().endswith('.zip'):
+            # pyodide doesn't provide a direct unzip; but files can be read using JS APIs — simple approach: warn
+            text = await f.text()
+            files[name] = text
+        else:
+            text = await f.text()
+            files[name] = text
+    return files
+
+
+# Core Ghosh calculation
+# Inputs:
+# Z: (n x n) transactions matrix where z_ij = flow from i -> j.
+# x: (n,) gross output vector (must correspond to sectors)
+# e: (n,) environmental extension vector (either per-unit intensity or total extension depending on flag)
+# v: (n,) primary input shock vector (defaults to small unit vector to compute multipliers, or user-specified)
+
+
+def compute_ghosh(Z, x, e, v=None, e_is_total=False):
+    n = Z.shape[0]
+    if x.shape[0] != n:
+        raise ValueError('Z and x length mismatch')
+
+    # Convert e to per-unit intensity if needed
+    if e_is_total:
+        # avoid division by zero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            intensity = np.where(x!=0, e / x, 0.0)
+    else:
+        intensity = e.copy()
+
+    # Build G matrix: G_ij = z_ji / x_i  (allocation coefficients per Ghosh)
+    # Implementation: G = (Z.T) / x[:, None]
+    # Ensure no division by zero
+    x_col = x.reshape(-1,1)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        G = (Z.T) / x_col
+        G = np.nan_to_num(G, nan=0.0, posinf=0.0, neginf=0.0)
+
+    I = np.eye(n)
+    try:
+        M = np.linalg.inv(I - G)
+    except np.linalg.LinAlgError:
+        # fallback to pseudo-inverse if singular
+        M = np.linalg.pinv(I - G)
+
+    if v is None:
+        # by default compute impact per unit primary input in each sector: v = identity columns
+        # but we will compute total footprint multipliers: for a unit *increase in primary input of each sector*
+        v = np.eye(n)
+
+    # dx = M @ v
+    dx = M.dot(v)  # yields (n x n) if v is identity, otherwise (n,)
+
+    # Environmental multipliers: impact per unit primary input change
+    # If v was identity, then footprints = intensity @ dx  -> gives vector of length n (impact per unit primary input in each sector)
+    if dx.ndim == 2:
+        footprints = intensity.reshape(1,-1).dot(dx)
+        footprints = footprints.flatten()
+    else:
+        footprints = intensity * dx
+
+    # Also compute total footprint associated with current output x: total_env = intensity * x
+    total_env_current = (intensity * x)
+
+    return {
+        'G': G,
+        'M': M,
+        'dx': dx,
+        'footprints': footprints,
+        'intensity': intensity,
+        'total_env_current': total_env_current
+    }
+
+
+# Handlers & UI wiring
+
+async def run_from_uploaded_files(files_dict, e_is_total=False):
+    # Expected keys: Z.csv, x.csv, e.csv (case-insensitive). Find them
+    names = {k.lower():k for k in files_dict.keys()}
+    # flexible matching
+    z_key = None
+    x_key = None
+    e_key = None
+    for k in names:
+        if k.endswith('z.csv') or k == 'z.csv' or 'z'==k:
+            z_key = names[k]
+        if k.endswith('x.csv') or k == 'x.csv' or 'x'==k:
+            x_key = names[k]
+        if k.endswith('e.csv') or k == 'e.csv' or 'e'==k:
+            e_key = names[k]
+
+    status = document.getElementById('status')
+    results_el = document.getElementById('results')
+
+    if not (z_key and x_key and e_key):
+        status.innerText = 'Could not find all of Z.csv, x.csv, e.csv in uploaded files. Using demo.'
+        await run_example()
+        return
+
+    try:
+        Z = csv_to_matrix(files_dict[z_key])
+        x = csv_to_vector(files_dict[x_key])
+        e = csv_to_vector(files_dict[e_key])
+    except Exception as ex:
+        status.innerText = f'Error parsing CSVs: {ex}'
+        return
+
+    if Z.shape[0] != Z.shape[1]:
+        status.innerText = 'Z must be square (n x n)'
+        return
+    if Z.shape[0] != x.shape[0] or x.shape[0] != e.shape[0]:
+        status.innerText = 'Dimension mismatch between Z, x and e'
+        return
+
+    status.innerText = 'Running Ghosh computation...'
+    await asyncio.sleep(0.01)
+
+    out = compute_ghosh(Z, x, e, v=None, e_is_total=e_is_total)
+
+    # Summarize: top 10 sectors by footprints (largest impact per unit primary input)
+    footprints = out['footprints']
+    # create indices
+    idx = np.argsort(-footprints)[:10]
+    s = 'Top 10 sectors (index, footprint multiplier):\n'
+    for i in idx:
+        s += f'{int(i)}\t{float(footprints[i]):.6g}\n'
+
+    s += '\nTotal environment (current output) - top 10 sectors:\n'
+    tot = out['total_env_current']
+    idx2 = np.argsort(-tot)[:10]
+    for i in idx2:
+        s += f'{int(i)}\t{float(tot[i]):.6g}\n'
+
+    results_el.innerText = s
+    status.innerText = 'Done.'
+
+
+async def run_example():
+    status = document.getElementById('status')
+    results_el = document.getElementById('results')
+    status.innerText = 'Generating example dataset (130 sectors)...'
+    await asyncio.sleep(0.01)
+
+    n = 130
+    rng = np.random.default_rng(42)
+    # Create an artificial transactions matrix Z where column sums are a portion of outputs
+    # Generate outputs x > 0
+    x = rng.uniform(100, 1000, size=n)
+    # Build Z so that z_ij are fractions of column output x_j
+    A = rng.uniform(0, 0.2, size=(n,n))
+    # scale columns so that columns sum to between 10% and 50% of x_j
+    col_share = rng.uniform(0.1, 0.5, size=n)
+    Z = (A / A.sum(axis=0, keepdims=True)) * (col_share * x)
+    Z = np.nan_to_num(Z)
+    # environmental intensity per-unit (e.g., emissions per unit output)
+    intensity = rng.uniform(0.01, 2.0, size=n)
+
+    status.innerText = 'Running Ghosh on example data...'
+    await asyncio.sleep(0.01)
+
+    out = compute_ghosh(Z, x, intensity, v=None, e_is_total=False)
+
+    footprints = out['footprints']
+    idx = np.argsort(-footprints)[:10]
+    s = 'Top 10 sectors (index, footprint multiplier):\n'
+    for i in idx:
+        s += f'{int(i)}\t{float(footprints[i]):.6g}\n'
+
+    s += '\nTotal environment (current output) - top 10 sectors:\n'
+    tot = out['total_env_current']
+    idx2 = np.argsort(-tot)[:10]
+    for i in idx2:
+        s += f'{int(i)}\t{float(tot[i]):.6g}\n'
+
+    results_el.innerText = s
+    status.innerText = 'Example run complete.'
+
+
+# Wire buttons
+runBtn = document.getElementById('runBtn')
+exampleBtn = document.getElementById('exampleBtn')
+fileInput = document.getElementById('fileInput')
+
+async def on_run_click(ev):
+    js_files = fileInput.files
+    if js_files.length == 0:
+        # run example
+        await run_example()
+        return
+    # read files
+    files = await read_uploaded_files(js_files)
+    e_is_total = document.getElementById('ext-is-total').checked
+    await run_from_uploaded_files(files, e_is_total)
+
+async def on_example_click(ev):
+    await run_example()
+
+runBtn.addEventListener('click', on_run_click)
+exampleBtn.addEventListener('click', on_example_click)
+
   </py-script>
 
-  <div id="output"></div>
+  <p style="margin-top:20px; font-size:0.9em">Notes: This demo implements a Ghosh (supply-driven) model where<br>
+  <code>G_ij = z_ji / x_i</code>, and total output response to a change in primary inputs is computed as <code>(I - G)^{-1}</code>. The environment-intensity vector <code>e</code> is treated as per-unit intensities by default. If you upload total extensions, check the box to convert to per-unit by dividing by <code>x</code>. The demo generator uses random numbers — replace with real accounts for meaningful results.</p>
+
 </body>
 </html>
