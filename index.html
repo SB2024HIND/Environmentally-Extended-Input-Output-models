@@ -2,102 +2,114 @@
 <html lang="en">
   
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>EEIO Dashboard — JavaScript Version</title>
-
-  <!-- Plotly for visualization -->
-  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>EEIO (Ghosh) Demo</title>
   <style>
-    body { font-family: Inter, system-ui, Arial; max-width:900px; margin:28px auto; padding:12px; }
-    .card{ border-radius:12px; box-shadow:0 6px 18px rgba(20,20,30,0.06); padding:16px; margin-bottom:16px }
-    label{ display:block; margin:8px 0 4px }
-    button{ padding:8px 12px; border-radius:8px; border:0; cursor:pointer }
-    pre{ background:#0f1724; color:#e6edf3; padding:12px; border-radius:8px; overflow:auto }
-    h2{ margin-top:24px; }
+    body { font-family: Inter, Arial, system-ui; max-width:900px; margin:28px auto; padding:12px; }
+    .card { border-radius:12px; box-shadow:0 6px 18px rgba(20,20,30,0.06); padding:16px; margin-bottom:16px; }
+    button { padding:8px 12px; border-radius:8px; border:0; cursor:pointer; }
+    pre { background:#0f1724; color:#e6edf3; padding:12px; border-radius:8px; overflow:auto; }
+    h2 { margin-top:24px; }
+    svg { width:100%; height:auto; }
   </style>
 </head>
   
 <body>
-  <h1>Environmentally-Extended IO — Ghosh model (JS demo)</h1>
+  <h1>EEIO (Ghosh) Model Demo</h1>
 
-  <!-- EEIO Demo Card -->
+  <!-- Flow Chart -->
   <div class="card">
-    <h2>EEIO Ghosh Example (130 sectors)</h2>
-    <p>Click below to generate artificial EEIO results for demonstration.</p>
-    <button id="runExampleBtn">Load Example EEIO</button>
+    <h2>EEIO Ghosh Flow Chart</h2>
+    <svg viewBox="0 0 800 400">
+      <!-- Z -->
+      <rect x="50" y="50" width="150" height="50" fill="#4DBFB5" rx="8"/>
+      <text x="125" y="80" font-size="14" text-anchor="middle" fill="#fff">Z (Transactions)</text>
+
+      <!-- X -->
+      <rect x="50" y="150" width="150" height="50" fill="#FFB74D" rx="8"/>
+      <text x="125" y="180" font-size="14" text-anchor="middle" fill="#fff">X (Gross Output)</text>
+
+      <!-- Ghosh Multipliers -->
+      <rect x="300" y="100" width="200" height="50" fill="#6A5ACD" rx="8"/>
+      <text x="400" y="130" font-size="14" text-anchor="middle" fill="#fff">Ghosh Multipliers (I - G)^-1</text>
+
+      <!-- F -->
+      <rect x="550" y="100" width="150" height="50" fill="#E57373" rx="8"/>
+      <text x="625" y="130" font-size="14" text-anchor="middle" fill="#fff">F (Environmental Ext.)</text>
+
+      <!-- Arrows -->
+      <line x1="200" y1="75" x2="300" y2="125" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+      <line x1="200" y1="175" x2="300" y2="125" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+      <line x1="500" y1="125" x2="550" y2="125" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#000"/>
+        </marker>
+      </defs>
+    </svg>
+  </div>
+
+  <!-- EEIO Example -->
+  <div class="card">
+    <h2>EEIO Dummy Calculation</h2>
+    <button id="runBtn">Run Example</button>
     <div id="status">No run yet.</div>
     <pre id="results">(results will appear here)</pre>
   </div>
 
-  <!-- Scenario Visualization Card -->
+  <!-- Matrices -->
   <div class="card">
-    <h2>Scenario Visualization (2000–2050)</h2>
-    <p>This is an interactive example of 5 scenarios over time.</p>
-    <div id="bar-plot" style="width:100%;height:400px;"></div>
-    <div id="line-plot" style="width:100%;height:400px;"></div>
+    <h2>Dummy Matrices (Z, X, F)</h2>
+    <pre id="matrices">(matrices will appear here)</pre>
   </div>
 
   <script>
-    // ------------------- EEIO Demo -------------------
-    function runEeiOExample(){
+    function runEEIODemo(){
       const status = document.getElementById('status');
       const resultsEl = document.getElementById('results');
-      status.innerText = 'Generating example dataset...';
+      const matricesEl = document.getElementById('matrices');
 
-      const n = 130;
-      // artificial matrices
-      let Z = Array.from({length:n}, ()=>Array.from({length:n}, ()=>Math.random()*0.2));
-      let x = Array.from({length:n}, ()=>Math.random()*900+100);
-      let e = Array.from({length:n}, ()=>Math.random()*2+0.01);
+      status.innerText = 'Generating dummy dataset...';
 
-      // Compute "footprints" (simplified version)
-      let footprints = Z.map((row,i)=>row.reduce((sum,j)=>sum + j*e[i],0));
-      let total_env_current = x.map((val,i)=>val*e[i]);
+      const n = 10; // smaller size for demonstration
+      // Dummy Z (transactions)
+      let Z = Array.from({length:n}, ()=>Array.from({length:n}, ()=>Math.random()*50));
 
-      // Top 10 by footprints
-      let idx = footprints.map((v,i)=>[i,v]).sort((a,b)=>b[1]-a[1]).slice(0,10);
-      let s = 'Top 10 sectors (index, footprint multiplier):\n';
-      idx.forEach(([i,v])=>s+=`${i}\t${v.toFixed(6)}\n`);
+      // Dummy X (gross output)
+      let X = Array.from({length:n}, ()=>Math.random()*100+50);
 
-      // Top 10 by total environment
-      let idx2 = total_env_current.map((v,i)=>[i,v]).sort((a,b)=>b[1]-a[1]).slice(0,10);
-      s+='\nTotal environment (current output) - top 10 sectors:\n';
-      idx2.forEach(([i,v])=>s+=`${i}\t${v.toFixed(6)}\n`);
+      // Dummy F (environmental extension)
+      let F = Array.from({length:n}, ()=>Math.random()*10);
+
+      // Simplified Ghosh multiplier calculation (I-G)^-1 approximated as identity for demo)
+      let footprints = Z.map((row,i)=>row.reduce((sum,j)=>sum + j*F[i],0));
+      let total_env_current = X.map((val,i)=>val*F[i]);
+
+      // Top 5 by footprints
+      let idx = footprints.map((v,i)=>[i,v]).sort((a,b)=>b[1]-a[1]).slice(0,5);
+      let s = 'Top 5 sectors by footprint:\n';
+      idx.forEach(([i,v])=>s+=`${i}\t${v.toFixed(2)}\n`);
+
+      // Top 5 by total env
+      let idx2 = total_env_current.map((v,i)=>[i,v]).sort((a,b)=>b[1]-a[1]).slice(0,5);
+      s+='\nTop 5 sectors by total environment:\n';
+      idx2.forEach(([i,v])=>s+=`${i}\t${v.toFixed(2)}\n`);
 
       resultsEl.innerText = s;
-      status.innerText = 'Example run complete.';
+
+      // Show matrices
+      let matricesText = 'Z (Transactions Matrix):\n';
+      matricesText += Z.map(row=>row.map(v=>v.toFixed(1)).join(', ')).join('\n');
+      matricesText += '\n\nX (Gross Output):\n'+X.map(v=>v.toFixed(1)).join(', ');
+      matricesText += '\n\nF (Environmental Extension):\n'+F.map(v=>v.toFixed(1)).join(', ');
+      matricesEl.innerText = matricesText;
+
+      status.innerText = 'Dummy EEIO calculation complete.';
     }
 
-    document.getElementById('runExampleBtn').addEventListener('click', runEeiOExample);
-
-    // ------------------- Scenario Visualization -------------------
-    const years = [];
-    for(let y=2000; y<=2050; y+=5) years.push(y);
-
-    const scenarios = {};
-    for(let i=1;i<=5;i++){
-      scenarios[`Scenario ${i}`] = years.map(()=>Math.floor(Math.random()*150)+50);
-    }
-
-    // Bar Plot
-    const barData = Object.keys(scenarios).map(key=>({
-      x: years,
-      y: scenarios[key],
-      name: key,
-      type: 'bar'
-    }));
-    Plotly.newPlot('bar-plot', barData, {barmode:'group', title:'Scenario Comparison (Bar Plot)'});
-
-    // Line Plot
-    const lineData = Object.keys(scenarios).map(key=>({
-      x: years,
-      y: scenarios[key],
-      name: key,
-      mode:'lines+markers'
-    }));
-    Plotly.newPlot('line-plot', lineData, {title:'Scenario Comparison (Line Plot)'});
+    document.getElementById('runBtn').addEventListener('click', runEEIODemo);
   </script>
 </body>
 </html>
